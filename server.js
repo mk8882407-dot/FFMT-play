@@ -125,10 +125,24 @@ app.post('/api/spacepay/create', async (req, res) => {
     const order = { orderId, amount, currency: 'INR', method: 'spacepay', status: 'pending', paymentUrl: data.result.payment_url, createdAt: new Date().toISOString() };
     orders.set(orderId, order);
     res.json({ success: true, message: 'SpacePay payment link created. Payment status is not yet verified and no wallet is credited.', ...order });
-  } catch (err) {
-    console.error('SpacePay create error:', err.name, err.message);
-    res.status(502).json({ success: false, message: err.name === 'AbortError' ? 'SpacePay request timed out.' : 'Could not connect to SpacePay API.' });
+ } catch (err) {
+  console.error('SpacePay create error:', err.name, err.message);
+
+  // असली नेटवर्क त्रुटि दिखाएँ, लेकिन API Keys नहीं।
+  if (err.cause) {
+    console.error('SpacePay network cause:', {
+      name: err.cause.name,
+      code: err.cause.code,
+      message: err.cause.message
+    });
   }
+
+  res.status(502).json({
+    success: false,
+    message: 'SpacePay API connection failed. Check Render logs for network cause.',
+    errorCode: err.cause?.code || err.code || err.name
+  });
+}
 });
 
 // Webhook receipt-only test endpoint. It intentionally does NOT mark an order paid.
