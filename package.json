@@ -1,0 +1,13 @@
+{
+  "name": "ffmt-deposit-test-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Isolated FFMT Play dynamic UPI QR and SpacePay API testing server; no wallet crediting",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "express": "^4.21.2",
+    "qrcode": "^1.5.4"
+  }
+}
