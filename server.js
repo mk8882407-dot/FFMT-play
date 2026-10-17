@@ -88,7 +88,9 @@ app.post('/api/deposits/create', async (req, res) => {
   }
 });
 
-// SpacePay API according to https://spacepay.in/api-docs (POST /v1/pay).
+// SpacePay API endpoints per the dashboard documentation supplied by the user.
+// Create: POST https://spacepay.in/api/payment/v1/pay
+// Status: POST https://spacepay.in/api/payment/v1/order-status.
 app.post('/api/spacepay/create', async (req, res) => {
   try {
     const amount = parseAmount(req.body && req.body.amount);
@@ -103,14 +105,15 @@ app.post('/api/spacepay/create', async (req, res) => {
       amount: amount.toFixed(2),
       order_id: orderId,
       customer_mobile: String((req.body && req.body.customerMobile) || process.env.TEST_CUSTOMER_MOBILE || '9999999999').replace(/\D/g, '').slice(-10),
-      redirect_url: SPACEPAY_REDIRECT_URL
+      redirect_url: SPACEPAY_REDIRECT_URL,
+      note: 'Add money'
     };
     if (!/^\d{10}$/.test(payload.customer_mobile)) return res.status(400).json({ success: false, message: 'customerMobile must be a 10-digit mobile number.' });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     let gatewayResponse;
     try {
-      gatewayResponse = await fetch('https://api.spacepay.in/v1/pay', {
+      gatewayResponse = await fetch('https://spacepay.in/api/payment/v1/pay', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
@@ -118,31 +121,63 @@ app.post('/api/spacepay/create', async (req, res) => {
       });
     } finally { clearTimeout(timeout); }
     const data = await gatewayResponse.json().catch(() => ({}));
-    if (!gatewayResponse.ok || !data || !data.result || !data.result.payment_url) {
+    if (!gatewayResponse.ok || !data || data.status !== true || !data.result || !data.result.payment_url) {
       console.error('SpacePay create failed:', gatewayResponse.status, JSON.stringify(data).slice(0, 1000));
       return res.status(502).json({ success: false, message: 'SpacePay did not return a payment URL. Check SpacePay dashboard/API credentials and Render logs.', gatewayHttpStatus: gatewayResponse.status, gatewayResponse: data });
     }
-    const order = { orderId, amount, currency: 'INR', method: 'spacepay', status: 'pending', paymentUrl: data.result.payment_url, createdAt: new Date().toISOString() };
+    const gatewayOrderId = data.result.orderId || orderId;
+    const order = { orderId, gatewayOrderId, amount, currency: 'INR', method: 'spacepay', status: 'pending', paymentUrl: data.result.payment_url, createdAt: new Date().toISOString() };
     orders.set(orderId, order);
     res.json({ success: true, message: 'SpacePay payment link created. Payment status is not yet verified and no wallet is credited.', ...order });
- } catch (err) {
-  console.error('SpacePay create error:', err.name, err.message);
-
-  // असली नेटवर्क त्रुटि दिखाएँ, लेकिन API Keys नहीं।
-  if (err.cause) {
-    console.error('SpacePay network cause:', {
-      name: err.cause.name,
-      code: err.cause.code,
-      message: err.cause.message
-    });
+  } catch (err) {
+    console.error('SpacePay create error:', err.name, err.message);
+    res.status(502).json({ success: false, message: err.name === 'AbortError' ? 'SpacePay request timed out.' : 'Could not connect to SpacePay API.' });
   }
+});
 
-  res.status(502).json({
-    success: false,
-    message: 'SpacePay API connection failed. Check Render logs for network cause.',
-    errorCode: err.cause?.code || err.code || err.name
-  });
-}
+// Query SpacePay transaction status. This updates only the in-memory test record;
+// it does not credit any wallet. Use the original order_id sent during creation.
+app.post('/api/spacepay/status', async (req, res) => {
+  try {
+    if (!SPACEPAY_PUBLIC_KEY || !SPACEPAY_SECRET_KEY) {
+      return res.status(503).json({ success: false, message: 'Set SPACEPAY_PUBLIC_KEY and SPACEPAY_SECRET_KEY in Render environment variables.' });
+    }
+    const orderId = String((req.body && req.body.orderId) || '').trim();
+    if (!orderId) return res.status(400).json({ success: false, message: 'orderId is required.' });
+    const order = orders.get(orderId);
+    if (!order || order.method !== 'spacepay') {
+      return res.status(404).json({ success: false, message: 'SpacePay order not found in this server process memory.' });
+    }
+    const payload = {
+      public_key: SPACEPAY_PUBLIC_KEY,
+      secret_key: SPACEPAY_SECRET_KEY,
+      order_id: order.orderId
+    };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+    let gatewayResponse;
+    try {
+      gatewayResponse = await fetch('https://spacepay.in/api/payment/v1/order-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal
+      });
+    } finally { clearTimeout(timeout); }
+    const data = await gatewayResponse.json().catch(() => ({}));
+    if (!gatewayResponse.ok || !data || data.status !== true || !data.order_details) {
+      console.error('SpacePay status failed:', gatewayResponse.status, JSON.stringify(data).slice(0, 1000));
+      return res.status(502).json({ success: false, message: 'SpacePay did not return transaction status.', gatewayHttpStatus: gatewayResponse.status, gatewayResponse: data });
+    }
+    const details = data.order_details;
+    order.gatewayStatus = String(details.STATUS || 'UNKNOWN').toUpperCase();
+    order.lastStatusCheckAt = new Date().toISOString();
+    orders.set(orderId, order);
+    return res.json({ success: true, message: 'Transaction status fetched from SpacePay. No wallet was credited.', orderId, gatewayStatus: order.gatewayStatus, orderDetails: details, walletCreditEnabled: false });
+  } catch (err) {
+    console.error('SpacePay status error:', err.name, err.message);
+    return res.status(502).json({ success: false, message: err.name === 'AbortError' ? 'SpacePay status request timed out.' : 'Could not connect to SpacePay API.' });
+  }
 });
 
 // Webhook receipt-only test endpoint. It intentionally does NOT mark an order paid.
