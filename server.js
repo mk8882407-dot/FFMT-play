@@ -98,8 +98,8 @@ app.post('/api/spacepay/create', async (req, res) => {
     }
     const orderId = newOrderId('FFMTSPS');
     const payload = {
-      public_key: SPACEPAY_PUBLIC_KEY=pk_4c50ee2ddb9f59ca017f46dda1067995074fdaa5646005e51136bc1f02a281e0
-      secret_key: SPACEPAY_SECRET_KEY=3e17e9d370481d48593a165684bd0c3e92e2993215b3a53f1ddfa7e8b52634d6
+      public_key: SPACEPAY_PUBLIC_KEY=pk_4c50ee2ddb9f59ca017f46dda1067995074fdaa5646005e51136bc1f02a281e0,
+      secret_key: SPACEPAY_SECRET_KEY=3e17e9d370481d48593a165684bd0c3e92e2993215b3a53f1ddfa7e8b52634d6,
       amount: amount.toFixed(2),
       order_id: orderId,
       customer_mobile: String((req.body && req.body.customerMobile) || process.env.TEST_CUSTOMER_MOBILE || '9999999999').replace(/\D/g, '').slice(-10),
